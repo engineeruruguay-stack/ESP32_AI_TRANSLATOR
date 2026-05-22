@@ -245,6 +245,14 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t beep_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "BEEP route called. Audio driver not implemented yet.");
+    set_leds(30, 0, 30);
+    httpd_resp_sendstr(req, "BEEP route works. Audio driver not implemented yet.");
+    return ESP_OK;
+}
+
 static esp_err_t ota_get_handler(httpd_req_t *req)
 {
     const char *html =
@@ -285,6 +293,7 @@ static void start_web_server(void)
     httpd_uri_t green = {.uri="/green", .method=HTTP_GET, .handler=green_get_handler};
     httpd_uri_t blue = {.uri="/blue", .method=HTTP_GET, .handler=blue_get_handler};
     httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_get_handler};
+    httpd_uri_t beep_uri = {.uri="/beep", .method=HTTP_GET, .handler=beep_get_handler};
     httpd_uri_t ota_page = {.uri="/ota", .method=HTTP_GET, .handler=ota_get_handler};
     httpd_uri_t ota_upload = {.uri="/ota", .method=HTTP_POST, .handler=ota_post_handler};
     httpd_uri_t favicon_uri = {.uri="/favicon.ico", .method=HTTP_GET, .handler=empty_icon_handler};
@@ -297,6 +306,7 @@ static void start_web_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &green));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &blue));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &beep_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_page));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_upload));
     httpd_register_uri_handler(server, &favicon_uri);
