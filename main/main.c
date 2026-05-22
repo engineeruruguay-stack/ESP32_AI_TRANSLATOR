@@ -2,40 +2,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "audio.h"
-#include "translator.h"
 
-static const char *TAG = "ESP32_AI_TRANSLATOR";
+static const char *TAG = "ESP32_S3_DEMO";
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Инициализация голосового переводчика...");
+    ESP_LOGI(TAG, "ESP32-S3 AUDIO BOARD DEMO STARTED");
+    ESP_LOGI(TAG, "Это безопасный тест: WiFi, OpenAI и audio сейчас не используются.");
 
-    if (!audio_init()) {
-        ESP_LOGE(TAG, "Ошибка инициализации аудио");
-        return;
-    }
+    int counter = 0;
 
-    if (!translator_init()) {
-        ESP_LOGE(TAG, "Ошибка инициализации переводчика");
-        return;
-    }
-
-    while (true) {
-        audio_frame_t frame = {0};
-        if (audio_capture(&frame)) {
-            const char *spanish_text = translator_recognize_speech(&frame);
-            if (spanish_text != NULL) {
-                ESP_LOGI(TAG, "Распознано: %s", spanish_text);
-                const char *russian_text = translator_translate(spanish_text);
-                if (russian_text != NULL) {
-                    ESP_LOGI(TAG, "Перевод: %s", russian_text);
-                    // TODO: добавить синтез речи или вывод на экран
-                }
-            }
-            audio_frame_release(&frame);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(100));
+    while (1) {
+        ESP_LOGI(TAG, "Heartbeat: %d", counter++);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
