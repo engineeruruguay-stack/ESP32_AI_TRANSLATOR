@@ -1,0 +1,19 @@
+# Build outputs
+build/
+CMakeFiles/
+CMakeCache.txt
+sdkconfig
+sdkconfig.old
+idf_component.yml
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor
+.vscode/
+*.swp
+*.swo
+.DS_Store
