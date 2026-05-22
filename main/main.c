@@ -44,7 +44,7 @@ static esp_err_t tca9555_read_reg(uint8_t reg, uint8_t *value)
 static void set_all_leds(uint8_t red, uint8_t green, uint8_t blue)
 {
     for (int i = 0; i < LED_STRIP_COUNT; i++) {
-        ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, i, red, green, blue));
+        ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, i, green, red, blue));
     }
     ESP_ERROR_CHECK(led_strip_refresh(led_strip));
 }
