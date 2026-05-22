@@ -11,4 +11,5 @@ idf_component_register(
         esp_event
         nvs_flash
         esp_http_server
+        app_update
 )

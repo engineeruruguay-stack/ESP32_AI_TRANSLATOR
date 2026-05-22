@@ -11,6 +11,8 @@
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_wifi.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
 #include "led_strip.h"
 #include "nvs_flash.h"
 
@@ -140,6 +142,75 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static void reboot_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
+}
+
+static esp_err_t ota_post_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "OTA upload started. Size: %d bytes", req->content_len);
+
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+    if (update_partition == NULL) {
+        ESP_LOGE(TAG, "No OTA update partition found");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+        return ESP_FAIL;
+    }
+
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_FAIL;
+    }
+
+    char buffer[1024];
+    int remaining = req->content_len;
+
+    while (remaining > 0) {
+        int received = httpd_req_recv(req, buffer, remaining > sizeof(buffer) ? sizeof(buffer) : remaining);
+
+        if (received <= 0) {
+            ESP_LOGE(TAG, "OTA receive failed");
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA receive failed");
+            return ESP_FAIL;
+        }
+
+        err = esp_ota_write(ota_handle, buffer, received);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+            return ESP_FAIL;
+        }
+
+        remaining -= received;
+    }
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA end failed");
+        return ESP_FAIL;
+    }
+
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Set boot partition failed");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "OTA upload successful. Rebooting...");
+    httpd_resp_sendstr(req, "OTA upload successful. Rebooting in 2 seconds...");
+    xTaskCreate(reboot_task, "reboot_task", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
 static esp_err_t empty_icon_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "204 No Content");
@@ -183,8 +254,11 @@ static esp_err_t ota_get_handler(httpd_req_t *req)
         "a{display:block;margin:20px auto;color:white;font-size:22px}</style>"
         "</head><body>"
         "<h1>OTA UPDATE</h1>"
-        "<p>OTA page is working.</p>"
-        "<p>Firmware upload will be added next step.</p>"
+        "<p>Select build/esp32_ai_translator.bin</p>"
+        "<form method='POST' action='/ota' enctype='application/octet-stream'>"
+        "<input type='file' name='firmware' style='font-size:18px;margin:20px'>"
+        "<button type='submit' style='font-size:22px;padding:16px'>UPLOAD</button>"
+        "</form>"
         "<a href='/'>BACK</a>"
         "</body></html>";
 
@@ -212,6 +286,7 @@ static void start_web_server(void)
     httpd_uri_t blue = {.uri="/blue", .method=HTTP_GET, .handler=blue_get_handler};
     httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_get_handler};
     httpd_uri_t ota_page = {.uri="/ota", .method=HTTP_GET, .handler=ota_get_handler};
+    httpd_uri_t ota_upload = {.uri="/ota", .method=HTTP_POST, .handler=ota_post_handler};
     httpd_uri_t favicon_uri = {.uri="/favicon.ico", .method=HTTP_GET, .handler=empty_icon_handler};
     httpd_uri_t apple_icon_uri = {.uri="/apple-touch-icon.png", .method=HTTP_GET, .handler=empty_icon_handler};
     httpd_uri_t apple_icon_pre_uri = {.uri="/apple-touch-icon-precomposed.png", .method=HTTP_GET, .handler=empty_icon_handler};
@@ -223,6 +298,7 @@ static void start_web_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &blue));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_page));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_upload));
     httpd_register_uri_handler(server, &favicon_uri);
     httpd_register_uri_handler(server, &apple_icon_uri);
     httpd_register_uri_handler(server, &apple_icon_pre_uri);
