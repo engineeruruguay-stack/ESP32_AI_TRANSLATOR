@@ -113,19 +113,37 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     const char *html =
         "<!doctype html><html><head>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<style>body{font-family:Arial;background:#111;color:#eee;text-align:center;padding:30px}"
-        "a{display:block;margin:14px auto;padding:18px;width:220px;border-radius:12px;background:#333;color:white;text-decoration:none;font-size:22px}"
-        "</style></head><body>"
+        "<style>"
+        "body{font-family:Arial;background:#111;color:#eee;text-align:center;padding:30px}"
+        "button,a{display:block;margin:14px auto;padding:18px;width:240px;border-radius:12px;background:#333;color:white;text-decoration:none;font-size:22px;border:0}"
+        "#result{margin-top:20px;color:#8f8;font-size:18px}"
+        "</style>"
+        "<script>"
+        "async function cmd(path){"
+        "let r=await fetch(path);"
+        "let t=await r.text();"
+        "document.getElementById('result').innerText=t;"
+        "}"
+        "</script></head><body>"
         "<h1>ESP32-S3 AUDIO BOARD</h1>"
         "<p>Web panel is working</p>"
-        "<a href='/red'>RED</a>"
-        "<a href='/green'>GREEN</a>"
-        "<a href='/blue'>BLUE</a>"
-        "<a href='/status'>STATUS</a>"
+        "<button onclick=\"cmd('/red')\">RED</button>"
+        "<button onclick=\"cmd('/green')\">GREEN</button>"
+        "<button onclick=\"cmd('/blue')\">BLUE</button>"
+        "<button onclick=\"cmd('/status')\">STATUS</button>"
+        "<a href='/ota'>OTA UPDATE</a>"
+        "<div id='result'>Ready</div>"
         "</body></html>";
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t empty_icon_handler(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
 
@@ -156,6 +174,25 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t ota_get_handler(httpd_req_t *req)
+{
+    const char *html =
+        "<!doctype html><html><head>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<style>body{font-family:Arial;background:#111;color:#eee;text-align:center;padding:30px}"
+        "a{display:block;margin:20px auto;color:white;font-size:22px}</style>"
+        "</head><body>"
+        "<h1>OTA UPDATE</h1>"
+        "<p>OTA page is working.</p>"
+        "<p>Firmware upload will be added next step.</p>"
+        "<a href='/'>BACK</a>"
+        "</body></html>";
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 static void start_web_server(void)
 {
     static httpd_handle_t server = NULL;
@@ -165,6 +202,7 @@ static void start_web_server(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.max_uri_handlers = 12;
 
     ESP_ERROR_CHECK(httpd_start(&server, &config));
 
@@ -173,12 +211,22 @@ static void start_web_server(void)
     httpd_uri_t green = {.uri="/green", .method=HTTP_GET, .handler=green_get_handler};
     httpd_uri_t blue = {.uri="/blue", .method=HTTP_GET, .handler=blue_get_handler};
     httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_get_handler};
+    httpd_uri_t ota_page = {.uri="/ota", .method=HTTP_GET, .handler=ota_get_handler};
+    httpd_uri_t favicon_uri = {.uri="/favicon.ico", .method=HTTP_GET, .handler=empty_icon_handler};
+    httpd_uri_t apple_icon_uri = {.uri="/apple-touch-icon.png", .method=HTTP_GET, .handler=empty_icon_handler};
+    httpd_uri_t apple_icon_pre_uri = {.uri="/apple-touch-icon-precomposed.png", .method=HTTP_GET, .handler=empty_icon_handler};
+
 
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &red));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &green));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &blue));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_page));
+    httpd_register_uri_handler(server, &favicon_uri);
+    httpd_register_uri_handler(server, &apple_icon_uri);
+    httpd_register_uri_handler(server, &apple_icon_pre_uri);
+
 
     ESP_LOGI(TAG, "HTTP server started on port 80");
 }
