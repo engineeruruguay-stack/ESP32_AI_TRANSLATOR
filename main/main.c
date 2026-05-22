@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_http_server.h"
 #include "esp_wifi.h"
 #include "led_strip.h"
 #include "nvs_flash.h"
@@ -37,6 +38,7 @@ static i2c_master_bus_handle_t i2c_bus;
 static i2c_master_dev_handle_t tca9555;
 
 static bool wifi_connected = false;
+static void start_web_server(void);
 
 static void set_leds(uint8_t r, uint8_t g, uint8_t b)
 {
@@ -105,6 +107,82 @@ static bool button_pressed(uint8_t pin)
     return ((port1 & (1 << bit)) == 0);
 }
 
+
+static esp_err_t root_get_handler(httpd_req_t *req)
+{
+    const char *html =
+        "<!doctype html><html><head>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<style>body{font-family:Arial;background:#111;color:#eee;text-align:center;padding:30px}"
+        "a{display:block;margin:14px auto;padding:18px;width:220px;border-radius:12px;background:#333;color:white;text-decoration:none;font-size:22px}"
+        "</style></head><body>"
+        "<h1>ESP32-S3 AUDIO BOARD</h1>"
+        "<p>Web panel is working</p>"
+        "<a href='/red'>RED</a>"
+        "<a href='/green'>GREEN</a>"
+        "<a href='/blue'>BLUE</a>"
+        "<a href='/status'>STATUS</a>"
+        "</body></html>";
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t red_get_handler(httpd_req_t *req)
+{
+    set_leds(30, 0, 0);
+    httpd_resp_sendstr(req, "RED");
+    return ESP_OK;
+}
+
+static esp_err_t green_get_handler(httpd_req_t *req)
+{
+    set_leds(0, 30, 0);
+    httpd_resp_sendstr(req, "GREEN");
+    return ESP_OK;
+}
+
+static esp_err_t blue_get_handler(httpd_req_t *req)
+{
+    set_leds(0, 0, 30);
+    httpd_resp_sendstr(req, "BLUE");
+    return ESP_OK;
+}
+
+static esp_err_t status_get_handler(httpd_req_t *req)
+{
+    httpd_resp_sendstr(req, wifi_connected ? "WiFi CONNECTED" : "WiFi NOT CONNECTED");
+    return ESP_OK;
+}
+
+static void start_web_server(void)
+{
+    static httpd_handle_t server = NULL;
+
+    if (server != NULL) {
+        return;
+    }
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    ESP_ERROR_CHECK(httpd_start(&server, &config));
+
+    httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=root_get_handler};
+    httpd_uri_t red = {.uri="/red", .method=HTTP_GET, .handler=red_get_handler};
+    httpd_uri_t green = {.uri="/green", .method=HTTP_GET, .handler=green_get_handler};
+    httpd_uri_t blue = {.uri="/blue", .method=HTTP_GET, .handler=blue_get_handler};
+    httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_get_handler};
+
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &red));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &green));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &blue));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
+
+    ESP_LOGI(TAG, "HTTP server started on port 80");
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -128,6 +206,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         wifi_connected = true;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         set_leds(0, 30, 0);
+        start_web_server();
     }
 }
 
