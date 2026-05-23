@@ -253,6 +253,50 @@ static esp_err_t beep_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t i2cscan_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "I2C scan requested");
+
+    char response[1024];
+    int len = 0;
+    len += snprintf(response + len, sizeof(response) - len, "I2C scan on SDA GPIO11 / SCL GPIO10\\n");
+
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        i2c_device_config_t dev_config = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = addr,
+            .scl_speed_hz = 100000,
+        };
+
+        i2c_master_dev_handle_t dev = NULL;
+        esp_err_t add_err = i2c_master_bus_add_device(i2c_bus, &dev_config, &dev);
+        if (add_err != ESP_OK) {
+            continue;
+        }
+
+        esp_err_t probe_err = i2c_master_probe(i2c_bus, addr, 50);
+        i2c_master_bus_rm_device(dev);
+
+        if (probe_err == ESP_OK) {
+            ESP_LOGI(TAG, "I2C device found at 0x%02X", addr);
+            len += snprintf(response + len, sizeof(response) - len, "Found: 0x%02X", addr);
+
+            if (addr == 0x18 || addr == 0x19) {
+                len += snprintf(response + len, sizeof(response) - len, " possible ES8311");
+            }
+            if (addr == 0x20) {
+                len += snprintf(response + len, sizeof(response) - len, " TCA9555");
+            }
+
+            len += snprintf(response + len, sizeof(response) - len, "\\n");
+        }
+    }
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 static esp_err_t ota_get_handler(httpd_req_t *req)
 {
     const char *html =
@@ -294,6 +338,7 @@ static void start_web_server(void)
     httpd_uri_t blue = {.uri="/blue", .method=HTTP_GET, .handler=blue_get_handler};
     httpd_uri_t status = {.uri="/status", .method=HTTP_GET, .handler=status_get_handler};
     httpd_uri_t beep_uri = {.uri="/beep", .method=HTTP_GET, .handler=beep_get_handler};
+    httpd_uri_t i2cscan_uri = {.uri="/i2cscan", .method=HTTP_GET, .handler=i2cscan_get_handler};
     httpd_uri_t ota_page = {.uri="/ota", .method=HTTP_GET, .handler=ota_get_handler};
     httpd_uri_t ota_upload = {.uri="/ota", .method=HTTP_POST, .handler=ota_post_handler};
     httpd_uri_t favicon_uri = {.uri="/favicon.ico", .method=HTTP_GET, .handler=empty_icon_handler};
@@ -307,6 +352,7 @@ static void start_web_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &blue));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &beep_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &i2cscan_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_page));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_upload));
     httpd_register_uri_handler(server, &favicon_uri);
