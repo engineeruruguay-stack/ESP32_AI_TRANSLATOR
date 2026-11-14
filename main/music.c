@@ -8,6 +8,7 @@
 #include <strings.h>
 #include "driver/sdmmc_host.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 
@@ -17,13 +18,14 @@
 #include "third_party/minimp3.h"
 
 #define MOUNT "/sd"
-#define MAX_TRACKS 256
+#define MAX_TRACKS 8192
 #define MAX_PATH 512
 #define MAX_DEPTH 8
 static const char *TAG = "music";
 static sdmmc_card_t *card;
-static char tracks[MAX_TRACKS][MAX_PATH];
-static size_t folders[MAX_TRACKS], folder_count;
+static char (*tracks)[MAX_PATH];
+static size_t *folders;
+static size_t folder_count;
 static size_t count, selected;
 static FILE *file;
 static mp3dec_t decoder;
@@ -95,6 +97,18 @@ bool music_scan(void)
         esp_err_t result = esp_vfs_fat_sdmmc_mount(MOUNT, &host, &slot, &config, &card);
         ESP_LOGI(TAG, "microSD mount: %s", esp_err_to_name(result));
         if (result != ESP_OK) {
+            return false;
+        }
+    }
+    if (!tracks) {
+        tracks = heap_caps_malloc(MAX_TRACKS * sizeof(*tracks), MALLOC_CAP_SPIRAM);
+        folders = heap_caps_malloc(MAX_TRACKS * sizeof(*folders), MALLOC_CAP_SPIRAM);
+        if (!tracks || !folders) {
+            free(tracks);
+            free(folders);
+            tracks = NULL;
+            folders = NULL;
+            ESP_LOGE(TAG, "Cannot allocate music index in PSRAM");
             return false;
         }
     }

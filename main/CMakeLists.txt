@@ -9,6 +9,7 @@ idf_component_register(
         esp_driver_i2s
         esp_driver_sdmmc
         fatfs
+        heap
         lwip
         led_strip
         esp_wifi
