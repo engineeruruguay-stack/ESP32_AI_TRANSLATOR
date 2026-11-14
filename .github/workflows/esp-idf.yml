@@ -1,0 +1,33 @@
+name: ESP-IDF firmware
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and merge flash image
+        shell: bash
+        run: |
+          source /opt/esp/idf/export.sh
+          export IDF_TARGET=esp32s3
+          idf.py build
+          idf.py merge-bin -o waveshare-mvp.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: waveshare-esp32s3
+          path: |
+            build/waveshare-mvp.bin
+            build/esp32_ai_translator.bin
+            build/flasher_args.json
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/ota_data_initial.bin
+          if-no-files-found: error

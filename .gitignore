@@ -4,7 +4,6 @@ CMakeFiles/
 CMakeCache.txt
 sdkconfig
 sdkconfig.old
-idf_component.yml
 
 # Python
 .venv/
@@ -17,3 +16,7 @@ __pycache__/
 *.swp
 *.swo
 .DS_Store
+managed_components/
+sdkconfig.local
+.env
+.env.*

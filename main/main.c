@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -16,8 +17,9 @@
 #include "led_strip.h"
 #include "nvs_flash.h"
 
-#define WIFI_SSID "iPhone Aleksandr 16 pro"
-#define WIFI_PASS "12345678"
+#include "board_audio.h"
+#include "music.h"
+#include "stream.h"
 
 #define LED_GPIO 38
 #define LED_COUNT 7
@@ -27,7 +29,6 @@
 #define TCA9555_ADDR 0x20
 
 #define TCA9555_INPUT_PORT_1 0x01
-#define TCA9555_CONFIG_PORT_1 0x07
 
 #define K1_PIN 9
 #define K2_PIN 10
@@ -39,7 +40,12 @@ static led_strip_handle_t led_strip;
 static i2c_master_bus_handle_t i2c_bus;
 static i2c_master_dev_handle_t tca9555;
 
-static bool wifi_connected = false;
+static atomic_bool wifi_connected = false;
+#ifdef CONFIG_MVP_ENABLE_WEB
+static const bool web_enabled = true;
+#else
+static const bool web_enabled = false;
+#endif
 static void start_web_server(void);
 
 static void set_leds(uint8_t r, uint8_t g, uint8_t b)
@@ -65,19 +71,6 @@ static void leds_init(void)
     ESP_ERROR_CHECK(led_strip_clear(led_strip));
 }
 
-static void tca9555_write_reg(uint8_t reg, uint8_t value)
-{
-    uint8_t data[2] = {reg, value};
-    ESP_ERROR_CHECK(i2c_master_transmit(tca9555, data, sizeof(data), -1));
-}
-
-static uint8_t tca9555_read_reg(uint8_t reg)
-{
-    uint8_t value = 0;
-    ESP_ERROR_CHECK(i2c_master_transmit_receive(tca9555, &reg, 1, &value, 1, -1));
-    return value;
-}
-
 static void buttons_init(void)
 {
     i2c_master_bus_config_t bus_config = {
@@ -99,16 +92,9 @@ static void buttons_init(void)
 
     ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus, &dev_config, &tca9555));
 
-    tca9555_write_reg(TCA9555_CONFIG_PORT_1, 0xFF);
+    esp_err_t result = i2c_master_probe(i2c_bus, TCA9555_ADDR, 50);
+    ESP_LOGI(TAG, "TCA9555 0x20: %s", esp_err_to_name(result));
 }
-
-static bool button_pressed(uint8_t pin)
-{
-    uint8_t port1 = tca9555_read_reg(TCA9555_INPUT_PORT_1);
-    uint8_t bit = pin - 8;
-    return ((port1 & (1 << bit)) == 0);
-}
-
 
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
@@ -321,7 +307,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_connected = false;
         ESP_LOGE(TAG, "WiFi disconnected");
-        set_leds(30, 0, 0);
         esp_wifi_connect();
     }
 
@@ -329,8 +314,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         wifi_connected = true;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        set_leds(0, 30, 0);
-        start_web_server();
+        if (web_enabled) {
+            start_web_server();
+        }
     }
 }
 
@@ -349,81 +335,143 @@ static void wifi_init(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
+            .ssid = CONFIG_MVP_WIFI_SSID,
+            .password = CONFIG_MVP_WIFI_PASSWORD,
         },
     };
 
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
+typedef enum {
+    DIAGNOSTICS,
+    MUSIC,
+    ES_TO_RU,
+    RU_TO_ES,
+    MODE_COUNT
+} mode_t_mvp;
+
+static void show_mode(mode_t_mvp mode)
+{
+    static const uint8_t colors[MODE_COUNT][3] = {
+        [DIAGNOSTICS] = {12, 12, 12},
+        [MUSIC] = {0, 24, 0},
+        [ES_TO_RU] = {0, 0, 24},
+        [RU_TO_ES] = {20, 0, 20},
+    };
+    set_leds(colors[mode][0], colors[mode][1], colors[mode][2]);
+    static const char *names[] = {"diagnostics", "music", "ES -> RU", "RU -> ES"};
+    ESP_LOGI(TAG, "Mode: %s", names[mode]);
+}
+
+static uint8_t button_edges(void)
+{
+    static uint8_t candidate, stable;
+    static TickType_t changed;
+    uint8_t port;
+    const uint8_t reg = TCA9555_INPUT_PORT_1;
+    if (i2c_master_transmit_receive(tca9555, &reg, 1, &port, 1, 30) != ESP_OK) {
+        return 0;
+    }
+    uint8_t pressed = ~port & 0x0e;
+    TickType_t now = xTaskGetTickCount();
+    if (pressed != candidate) {
+        candidate = pressed;
+        changed = now;
+    }
+    if (now - changed < pdMS_TO_TICKS(35)) {
+        return 0;
+    }
+    uint8_t edges = candidate & ~stable;
+    stable = candidate;
+    return edges;
+}
+
 void app_main(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
-
-    ESP_LOGI(TAG, "Unified status demo started");
+    if (esp_ota_get_running_partition()) {
+        esp_err_t result = esp_ota_mark_app_valid_cancel_rollback();
+        if (result != ESP_OK && result != ESP_ERR_NOT_SUPPORTED) {
+            ESP_LOGW(TAG, "OTA validity: %s", esp_err_to_name(result));
+        }
+    }
 
     leds_init();
-    set_leds(0, 0, 30);
-
+    show_mode(DIAGNOSTICS);
     buttons_init();
+    board_audio_init(i2c_bus, tca9555);
+    music_scan();
+    if (CONFIG_MVP_WIFI_SSID[0]) {
+        wifi_init();
+    } else {
+        ESP_LOGI(TAG, "Wi-Fi disabled; set SSID through menuconfig");
+    }
 
-    ESP_LOGI(TAG, "Boot status: BLUE");
-    ESP_LOGI(TAG, "WiFi connecting: blinking YELLOW");
-    ESP_LOGI(TAG, "WiFi connected: GREEN");
-    ESP_LOGI(TAG, "WiFi error: RED");
-
-    wifi_init();
-
-    bool k1_prev = false;
-    bool k2_prev = false;
-    bool k3_prev = false;
-    int heartbeat = 0;
-
-    while (1) {
-        bool k1 = button_pressed(K1_PIN);
-        bool k2 = button_pressed(K2_PIN);
-        bool k3 = button_pressed(K3_PIN);
-
-        if (k1 && !k1_prev) {
-            ESP_LOGI(TAG, "K1: start WiFi reconnect");
-            wifi_connected = false;
-            set_leds(30, 30, 0);
-            esp_wifi_disconnect();
-            esp_wifi_connect();
-        }
-
-        if (k2 && !k2_prev) {
-            ESP_LOGI(TAG, "K2: audio test placeholder");
-            set_leds(0, 0, 30);
-        }
-
-        if (k3 && !k3_prev) {
-            ESP_LOGI(TAG, "K3: status requested. WiFi: %s", wifi_connected ? "CONNECTED" : "NOT CONNECTED");
-            if (wifi_connected) {
-                set_leds(0, 30, 0);
+    mode_t_mvp mode = DIAGNOSTICS;
+    TickType_t error_at = 0;
+    bool showing_error = false;
+    const uint8_t k1 = 1 << (K1_PIN - 8), k2 = 1 << (K2_PIN - 8),
+                  k3 = 1 << (K3_PIN - 8);
+    while (true) {
+        uint8_t pressed = button_edges();
+        bool ok = true;
+        if (pressed & k1) {
+            stream_stop();
+            music_stop();
+            mode = (mode + 1) % MODE_COUNT;
+            showing_error = false;
+            show_mode(mode);
+        } else if (pressed & k2) {
+            switch (mode) {
+            case DIAGNOSTICS:
+                board_diagnostics();
+                music_scan();
+                break;
+            case MUSIC:
+                if (music_active()) {
+                    music_stop();
+                } else {
+                    ok = music_select(false);
+                }
+                break;
+            case ES_TO_RU:
+            case RU_TO_ES:
+                if (stream_active()) {
+                    stream_finish();
+                } else {
+                    ok = wifi_connected && stream_start(mode == ES_TO_RU);
+                }
+                break;
+            default:
+                break;
+            }
+        } else if (pressed & k3) {
+            if (mode == MUSIC) {
+                ok = music_select(true);
+            } else if (stream_active()) {
+                stream_stop();
             } else {
-                set_leds(30, 30, 0);
+                ESP_LOGI(TAG, "Wi-Fi %s", wifi_connected ? "connected" : "offline");
             }
         }
-
-        k1_prev = k1;
-        k2_prev = k2;
-        k3_prev = k3;
-
-        if (!wifi_connected) {
-            set_leds(30, 30, 0);
-            vTaskDelay(pdMS_TO_TICKS(250));
-            led_strip_clear(led_strip);
-            vTaskDelay(pdMS_TO_TICKS(250));
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(500));
+        if (!music_tick() || !stream_tick() || !ok) {
+            set_leds(24, 0, 0);
+            showing_error = true;
+            error_at = xTaskGetTickCount();
         }
-
-        if ((heartbeat++ % 10) == 0) {
-            ESP_LOGI(TAG, "Heartbeat. WiFi: %s", wifi_connected ? "CONNECTED" : "NOT CONNECTED");
+        if (showing_error && xTaskGetTickCount() - error_at >= pdMS_TO_TICKS(900)) {
+            showing_error = false;
+            show_mode(mode);
+        }
+        // Decoding and capture already pace themselves through I2S DMA.
+        if (!music_active() && !stream_active()) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } else {
+            vTaskDelay(1);
         }
     }
 }

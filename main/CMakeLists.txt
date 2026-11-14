@@ -1,10 +1,14 @@
 idf_component_register(
-    SRCS "main.c"
+    SRCS "main.c" "board_audio.c" "music.c" "stream.c"
     INCLUDE_DIRS "."
     REQUIRES
         log
         freertos
         esp_driver_i2c
+        esp_driver_i2s
+        esp_driver_sdmmc
+        fatfs
+        lwip
         led_strip
         esp_wifi
         esp_netif

@@ -1,0 +1,18 @@
+menu "Waveshare Audio MVP"
+config MVP_WIFI_SSID
+    string "Wi-Fi SSID (empty disables Wi-Fi)"
+    default ""
+config MVP_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+config MVP_GATEWAY_IP
+    string "Test gateway IPv4 address (empty disables streaming)"
+    default ""
+config MVP_GATEWAY_PORT
+    int "Test gateway TCP port"
+    range 1 65535
+    default 8765
+config MVP_ENABLE_WEB
+    bool "Enable legacy HTTP panel and unauthenticated OTA on trusted test LAN"
+    default n
+endmenu
