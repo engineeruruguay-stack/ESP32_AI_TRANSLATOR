@@ -30,9 +30,7 @@
 
 #define TCA9555_INPUT_PORT_1 0x01
 
-#define K1_PIN 9
-#define K2_PIN 10
-#define K3_PIN 11
+#define K1_MASK (1U << 1)
 
 static const char *TAG = "STATUS_DEMO";
 
@@ -367,27 +365,51 @@ static void show_mode(mode_t_mvp mode)
     ESP_LOGI(TAG, "Mode: %s", names[mode]);
 }
 
-static uint8_t button_edges(void)
+typedef enum {
+    NO_PRESS,
+    SHORT_PRESS,
+    LONG_PRESS,
+    EXTRA_LONG_PRESS
+} button_action_t;
+
+static button_action_t read_k1(void)
 {
-    static uint8_t candidate, stable;
-    static TickType_t changed;
+    static bool candidate, stable, armed;
+    static TickType_t changed, down;
     uint8_t port;
     const uint8_t reg = TCA9555_INPUT_PORT_1;
     if (i2c_master_transmit_receive(tca9555, &reg, 1, &port, 1, 30) != ESP_OK) {
-        return 0;
+        return NO_PRESS;
     }
-    uint8_t pressed = ~port & 0x0e;
+    bool pressed = (port & K1_MASK) == 0;
     TickType_t now = xTaskGetTickCount();
     if (pressed != candidate) {
         candidate = pressed;
         changed = now;
     }
     if (now - changed < pdMS_TO_TICKS(35)) {
-        return 0;
+        return NO_PRESS;
     }
-    uint8_t edges = candidate & ~stable;
-    stable = candidate;
-    return edges;
+    if (!stable && !pressed) {
+        armed = true;
+    }
+    if (stable == pressed) {
+        return NO_PRESS;
+    }
+    stable = pressed;
+    if (pressed) {
+        down = changed;
+        return NO_PRESS;
+    }
+    if (!armed) {
+        return NO_PRESS;
+    }
+    TickType_t held = changed - down;
+    ESP_LOGI(TAG, "K1 held %lu ms", (unsigned long)(held * portTICK_PERIOD_MS));
+    if (held >= pdMS_TO_TICKS(2500)) {
+        return EXTRA_LONG_PRESS;
+    }
+    return held >= pdMS_TO_TICKS(700) ? LONG_PRESS : SHORT_PRESS;
 }
 
 void app_main(void)
@@ -401,31 +423,34 @@ void app_main(void)
     }
 
     leds_init();
-    show_mode(DIAGNOSTICS);
     buttons_init();
     board_audio_init(i2c_bus, tca9555);
-    music_scan();
+    bool has_tracks = music_scan();
     if (CONFIG_MVP_WIFI_SSID[0]) {
         wifi_init();
     } else {
         ESP_LOGI(TAG, "Wi-Fi disabled; set SSID through menuconfig");
     }
 
-    mode_t_mvp mode = DIAGNOSTICS;
+    mode_t_mvp mode = MUSIC;
+    show_mode(mode);
+    if (has_tracks) {
+        ESP_LOGI(TAG, "Autoplay from microSD");
+    }
+    bool autoplay_error = has_tracks && !music_select(false);
     TickType_t error_at = 0;
     bool showing_error = false;
-    const uint8_t k1 = 1 << (K1_PIN - 8), k2 = 1 << (K2_PIN - 8),
-                  k3 = 1 << (K3_PIN - 8);
     while (true) {
-        uint8_t pressed = button_edges();
-        bool ok = true;
-        if (pressed & k1) {
+        button_action_t action = read_k1();
+        bool ok = !autoplay_error;
+        autoplay_error = false;
+        if (action == EXTRA_LONG_PRESS) {
             stream_stop();
             music_stop();
             mode = (mode + 1) % MODE_COUNT;
             showing_error = false;
             show_mode(mode);
-        } else if (pressed & k2) {
+        } else if (action == SHORT_PRESS) {
             switch (mode) {
             case DIAGNOSTICS:
                 board_diagnostics();
@@ -449,7 +474,7 @@ void app_main(void)
             default:
                 break;
             }
-        } else if (pressed & k3) {
+        } else if (action == LONG_PRESS) {
             if (mode == MUSIC) {
                 ok = music_select(true);
             } else if (stream_active()) {

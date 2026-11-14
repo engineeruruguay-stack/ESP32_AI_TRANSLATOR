@@ -162,6 +162,10 @@ bool music_tick(void)
             music_stop();
             return false;
         }
+        if (!played) {
+            ESP_LOGI(TAG, "First decoded PCM sent to I2S (%d Hz source, %d channels)",
+                     info.hz, info.channels);
+        }
         played = true;
     }
     if (info.frame_bytes > 0) {
@@ -177,7 +181,9 @@ bool music_tick(void)
         }
     }
     music_stop();
-    if (!ok) {
+    if (ok) {
+        ESP_LOGI(TAG, "Track completed");
+    } else {
         ESP_LOGE(TAG, "MP3 decode or SD read failed");
     }
     return ok;

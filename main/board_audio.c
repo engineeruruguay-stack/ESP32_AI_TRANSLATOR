@@ -6,6 +6,7 @@
 #include "esp_log.h"
 
 static const char *TAG = "board_audio";
+enum { OUTPUT_PERCENT = 10 };
 static i2s_chan_handle_t tx, rx;
 static i2c_master_dev_handle_t tca;
 static bool mic_ok, speaker_ok;
@@ -88,7 +89,7 @@ void board_audio_init(i2c_master_bus_handle_t bus, i2c_master_dev_handle_t expan
         };
         dac = es8311_codec_new(&speaker);
         speaker_ok = dac && tca && dac->set_fs(dac, &format) == 0 &&
-                     dac->set_vol(dac, -24) == 0 && dac->enable(dac, true) == 0;
+                     dac->enable(dac, true) == 0 && dac->set_vol(dac, 0) == 0;
     }
     ESP_LOGI(TAG, "Capture %s, speaker %s", mic_ok ? "ready" : "unavailable",
              speaker_ok ? "ready" : "unavailable");
@@ -131,8 +132,10 @@ bool board_write(const int16_t *mono, size_t frames)
         return false;
     }
     for (size_t i = 0; i < frames; ++i) {
-        stereo[2 * i] = mono[i];
-        stereo[2 * i + 1] = mono[i];
+        // Apply the same fixed ceiling to music, diagnostics and gateway audio.
+        int16_t sample = (int32_t)mono[i] * OUTPUT_PERCENT / 100;
+        stereo[2 * i] = sample;
+        stereo[2 * i + 1] = sample;
     }
     return i2s_channel_write(tx, stereo, frames * 4, &bytes, 150) == ESP_OK &&
            bytes == frames * 4;
