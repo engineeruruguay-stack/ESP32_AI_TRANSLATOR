@@ -17,10 +17,13 @@
 #include "third_party/minimp3.h"
 
 #define MOUNT "/sd"
-#define MAX_TRACKS 64
+#define MAX_TRACKS 256
+#define MAX_PATH 512
+#define MAX_DEPTH 8
 static const char *TAG = "music";
 static sdmmc_card_t *card;
-static char tracks[MAX_TRACKS][256];
+static char tracks[MAX_TRACKS][MAX_PATH];
+static size_t folders[MAX_TRACKS], folder_count;
 static size_t count, selected;
 static FILE *file;
 static mp3dec_t decoder;
@@ -30,9 +33,50 @@ static size_t buffered;
 static unsigned phase;
 static bool played;
 
+static size_t folder_length(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    return slash ? (size_t)(slash - path) : 0;
+}
+
+static int compare_folders(const char *a, const char *b)
+{
+    size_t alen = folder_length(a), blen = folder_length(b);
+    int result = strncmp(a, b, alen < blen ? alen : blen);
+    return result ? result : (alen > blen) - (alen < blen);
+}
+
 static int compare_names(const void *a, const void *b)
 {
-    return strcmp(a, b);
+    int result = compare_folders(a, b);
+    return result ? result : strcmp(a, b);
+}
+
+static void scan_folder(char *path, size_t length, unsigned depth)
+{
+    DIR *dir = opendir(path);
+    if (!dir) {
+        ESP_LOGW(TAG, "Cannot scan %s", path);
+        return;
+    }
+    struct dirent *entry;
+    while (count < MAX_TRACKS && (entry = readdir(dir))) {
+        const char *name = entry->d_name;
+        size_t size = strlen(name);
+        if (name[0] == '.' || length + 1 + size >= sizeof(MOUNT) + MAX_PATH) {
+            continue;
+        }
+        path[length] = '/';
+        memcpy(path + length + 1, name, size + 1);
+        if (entry->d_type == DT_DIR && depth < MAX_DEPTH) {
+            scan_folder(path, length + 1 + size, depth + 1);
+        } else if (entry->d_type == DT_REG && size > 4 &&
+                   strcasecmp(name + size - 4, ".mp3") == 0) {
+            strcpy(tracks[count++], path + sizeof(MOUNT));
+        }
+        path[length] = '\0';
+    }
+    closedir(dir);
 }
 
 bool music_scan(void)
@@ -47,30 +91,26 @@ bool music_scan(void)
         slot.d0 = 41;
         slot.d1 = slot.d2 = slot.d3 = GPIO_NUM_NC;
         slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
-        const esp_vfs_fat_sdmmc_mount_config_t config = {.max_files = 2};
+        const esp_vfs_fat_sdmmc_mount_config_t config = {.max_files = MAX_DEPTH + 2};
         esp_err_t result = esp_vfs_fat_sdmmc_mount(MOUNT, &host, &slot, &config, &card);
         ESP_LOGI(TAG, "microSD mount: %s", esp_err_to_name(result));
         if (result != ESP_OK) {
             return false;
         }
     }
-    count = selected = 0;
-    DIR *dir = opendir(MOUNT);
-    if (!dir) {
-        return false;
-    }
-    struct dirent *entry;
-    while (count < MAX_TRACKS && (entry = readdir(dir))) {
-        size_t length = strlen(entry->d_name);
-        if (entry->d_type == DT_REG && entry->d_name[0] != '.' &&
-            length > 4 && length < sizeof(tracks[0]) &&
-            strcasecmp(entry->d_name + length - 4, ".mp3") == 0) {
-            memcpy(tracks[count++], entry->d_name, length + 1);
+    count = selected = folder_count = 0;
+    char path[sizeof(MOUNT) + MAX_PATH] = MOUNT;
+    scan_folder(path, sizeof(MOUNT) - 1, 0);
+    qsort(tracks, count, sizeof(tracks[0]), compare_names);
+    for (size_t i = 0; i < count; ++i) {
+        if (i == 0 || compare_folders(tracks[i - 1], tracks[i]) != 0) {
+            folders[folder_count++] = i;
         }
     }
-    closedir(dir);
-    qsort(tracks, count, sizeof(tracks[0]), compare_names);
-    ESP_LOGI(TAG, "MP3 files in root: %u", (unsigned)count);
+    ESP_LOGI(TAG, "MP3 files: %u, folders: %u", (unsigned)count, (unsigned)folder_count);
+    if (count == MAX_TRACKS) {
+        ESP_LOGW(TAG, "MP3 index reached its limit");
+    }
     return count != 0;
 }
 
@@ -102,13 +142,9 @@ static bool skip_id3(FILE *track)
     return fseek(track, size + ((header[5] & 0x10) ? 10 : 0), SEEK_CUR) == 0;
 }
 
-bool music_select(int step)
+static bool play_selected(void)
 {
     music_stop();
-    if (!board_speaker_ready() || (!count && !music_scan())) {
-        return false;
-    }
-    selected = (selected + count + step) % count;
     char filename[sizeof(MOUNT) + sizeof(tracks[0])];
     snprintf(filename, sizeof(filename), MOUNT "/%s", tracks[selected]);
     file = fopen(filename, "rb");
@@ -122,6 +158,32 @@ bool music_select(int step)
     played = false;
     ESP_LOGI(TAG, "Playing %s", filename);
     return true;
+}
+
+bool music_select(int step)
+{
+    if (!board_speaker_ready() || (!count && !music_scan())) {
+        return false;
+    }
+    selected = (selected + count + step) % count;
+    return play_selected();
+}
+
+bool music_select_folder(int direction)
+{
+    if (!board_speaker_ready() || (!count && !music_scan())) {
+        return false;
+    }
+    if (folder_count <= 1) {
+        return true;
+    }
+    size_t index = 0;
+    while (index + 1 < folder_count && folders[index + 1] <= selected) {
+        ++index;
+    }
+    index = (index + folder_count + direction) % folder_count;
+    selected = folders[index];
+    return play_selected();
 }
 
 bool music_tick(void)

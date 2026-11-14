@@ -371,7 +371,8 @@ static void show_mode(mode_t_mvp mode)
 typedef enum {
     NO_PRESS,
     SHORT_PRESS,
-    LONG_PRESS
+    LONG_PRESS,
+    FOLDER_PRESS
 } button_action_t;
 
 typedef struct {
@@ -405,6 +406,9 @@ static button_action_t read_button(button_state_t *state, bool pressed, const ch
     }
     TickType_t held = state->changed - state->down;
     ESP_LOGI(TAG, "%s held %lu ms", name, (unsigned long)(held * portTICK_PERIOD_MS));
+    if (held >= pdMS_TO_TICKS(2500)) {
+        return FOLDER_PRESS;
+    }
     return held >= pdMS_TO_TICKS(700) ? LONG_PRESS : SHORT_PRESS;
 }
 
@@ -484,12 +488,16 @@ void app_main(void)
         if (mode == MUSIC) {
             if (up == SHORT_PRESS) {
                 board_adjust_volume(1);
-            } else if (up != NO_PRESS) {
+            } else if (up == FOLDER_PRESS) {
+                ok = music_select_folder(1);
+            } else if (up == LONG_PRESS) {
                 ok = music_select(1);
             }
             if (lower == SHORT_PRESS) {
                 board_adjust_volume(-1);
-            } else if (lower != NO_PRESS) {
+            } else if (lower == FOLDER_PRESS) {
+                ok = music_select_folder(-1) && ok;
+            } else if (lower == LONG_PRESS) {
                 ok = music_select(-1) && ok;
             }
         }
