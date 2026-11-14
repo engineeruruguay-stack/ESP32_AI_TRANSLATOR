@@ -33,7 +33,7 @@
 
 #define K1_MASK (1U << 1)
 #define K2_MASK (1U << 2)
-#define BOOT_GPIO GPIO_NUM_0
+#define K4_GPIO GPIO_NUM_0 // Key4 (BOOT) on Waveshare schematic v1.1
 
 static const char *TAG = "STATUS_DEMO";
 
@@ -371,8 +371,7 @@ static void show_mode(mode_t_mvp mode)
 typedef enum {
     NO_PRESS,
     SHORT_PRESS,
-    LONG_PRESS,
-    EXTRA_LONG_PRESS
+    LONG_PRESS
 } button_action_t;
 
 typedef struct {
@@ -406,9 +405,6 @@ static button_action_t read_button(button_state_t *state, bool pressed, const ch
     }
     TickType_t held = state->changed - state->down;
     ESP_LOGI(TAG, "%s held %lu ms", name, (unsigned long)(held * portTICK_PERIOD_MS));
-    if (held >= pdMS_TO_TICKS(2500)) {
-        return EXTRA_LONG_PRESS;
-    }
     return held >= pdMS_TO_TICKS(700) ? LONG_PRESS : SHORT_PRESS;
 }
 
@@ -424,8 +420,8 @@ void app_main(void)
 
     leds_init();
     buttons_init();
-    ESP_ERROR_CHECK(gpio_set_direction(BOOT_GPIO, GPIO_MODE_INPUT));
-    ESP_ERROR_CHECK(gpio_pullup_en(BOOT_GPIO));
+    ESP_ERROR_CHECK(gpio_set_direction(K4_GPIO, GPIO_MODE_INPUT));
+    ESP_ERROR_CHECK(gpio_pullup_en(K4_GPIO));
     board_audio_init(i2c_bus, tca9555);
     bool has_tracks = music_scan();
     if (CONFIG_MVP_WIFI_SSID[0]) {
@@ -442,7 +438,7 @@ void app_main(void)
     bool autoplay_error = has_tracks && !music_select(0);
     TickType_t error_at = 0;
     bool showing_error = false;
-    button_state_t k1 = {0}, k2 = {0}, boot = {0};
+    button_state_t k1 = {0}, k2 = {0}, k4 = {0};
     while (true) {
         uint8_t port;
         const uint8_t reg = TCA9555_INPUT_PORT_1;
@@ -451,16 +447,16 @@ void app_main(void)
             action = read_button(&k1, !(port & K1_MASK), "K1");
             up = read_button(&k2, !(port & K2_MASK), "K2");
         }
-        button_action_t lower = read_button(&boot, !gpio_get_level(BOOT_GPIO), "BOOT");
+        button_action_t lower = read_button(&k4, !gpio_get_level(K4_GPIO), "K4");
         bool ok = !autoplay_error;
         autoplay_error = false;
-        if (action == EXTRA_LONG_PRESS) {
+        if (action == SHORT_PRESS) {
             stream_stop();
             music_stop();
             mode = (mode + 1) % MODE_COUNT;
             showing_error = false;
             show_mode(mode);
-        } else if (action == SHORT_PRESS) {
+        } else if (action != NO_PRESS) {
             switch (mode) {
             case DIAGNOSTICS:
                 board_diagnostics();
@@ -483,14 +479,6 @@ void app_main(void)
                 break;
             default:
                 break;
-            }
-        } else if (action == LONG_PRESS) {
-            if (mode == MUSIC) {
-                ok = music_select(1);
-            } else if (stream_active()) {
-                stream_stop();
-            } else {
-                ESP_LOGI(TAG, "Wi-Fi %s", wifi_connected ? "connected" : "offline");
             }
         }
         if (mode == MUSIC) {
