@@ -19,6 +19,8 @@
 #include "nvs_flash.h"
 
 #include "board_audio.h"
+#include "usb_audio.h"
+#include "battery.h"
 #include "music.h"
 #include "stream.h"
 
@@ -352,6 +354,7 @@ typedef enum {
     MUSIC,
     ES_TO_RU,
     RU_TO_ES,
+    USB_AUDIO,
     MODE_COUNT
 } mode_t_mvp;
 
@@ -362,9 +365,10 @@ static void show_mode(mode_t_mvp mode)
         [MUSIC] = {0, 24, 0},
         [ES_TO_RU] = {0, 0, 24},
         [RU_TO_ES] = {20, 0, 20},
+        [USB_AUDIO] = {0, 18, 18},
     };
     set_leds(colors[mode][0], colors[mode][1], colors[mode][2]);
-    static const char *names[] = {"diagnostics", "music", "ES -> RU", "RU -> ES"};
+    static const char *names[] = {"diagnostics", "music", "ES -> RU", "RU -> ES", "USB audio"};
     ESP_LOGI(TAG, "Mode: %s", names[mode]);
 }
 
@@ -423,6 +427,14 @@ void app_main(void)
     }
 
     leds_init();
+    unsigned blinks = battery_blinks();
+    ESP_LOGI(TAG, "Battery indication: %u (0 means unavailable)", blinks);
+    for (unsigned i = 0; i < blinks; ++i) {
+        set_leds(18, 8, 0);
+        vTaskDelay(pdMS_TO_TICKS(220));
+        set_leds(0, 0, 0);
+        vTaskDelay(pdMS_TO_TICKS(220));
+    }
     buttons_init();
     ESP_ERROR_CHECK(gpio_set_direction(K4_GPIO, GPIO_MODE_INPUT));
     ESP_ERROR_CHECK(gpio_pullup_en(K4_GPIO));
@@ -457,9 +469,13 @@ void app_main(void)
         if (action == SHORT_PRESS) {
             stream_stop();
             music_stop();
+            usb_audio_leave();
             mode = (mode + 1) % MODE_COUNT;
             showing_error = false;
             show_mode(mode);
+            if (mode == USB_AUDIO) {
+                ok = usb_audio_enter();
+            }
         } else if (action != NO_PRESS) {
             switch (mode) {
             case DIAGNOSTICS:
@@ -485,23 +501,23 @@ void app_main(void)
                 break;
             }
         }
-        if (mode == MUSIC) {
+        if (mode == MUSIC || mode == USB_AUDIO) {
             if (up == SHORT_PRESS) {
                 board_adjust_volume(1);
-            } else if (up == FOLDER_PRESS) {
+            } else if (mode == MUSIC && up == FOLDER_PRESS) {
                 ok = music_select_folder(1);
-            } else if (up == LONG_PRESS) {
+            } else if (mode == MUSIC && up == LONG_PRESS) {
                 ok = music_select(1);
             }
             if (lower == SHORT_PRESS) {
                 board_adjust_volume(-1);
-            } else if (lower == FOLDER_PRESS) {
+            } else if (mode == MUSIC && lower == FOLDER_PRESS) {
                 ok = music_select_folder(-1) && ok;
-            } else if (lower == LONG_PRESS) {
+            } else if (mode == MUSIC && lower == LONG_PRESS) {
                 ok = music_select(-1) && ok;
             }
         }
-        if (!music_tick() || !stream_tick() || !ok) {
+        if (!music_tick() || !stream_tick() || !usb_audio_tick() || !ok) {
             set_leds(24, 0, 0);
             showing_error = true;
             error_at = xTaskGetTickCount();
@@ -511,7 +527,7 @@ void app_main(void)
             show_mode(mode);
         }
         // Decoding and capture already pace themselves through I2S DMA.
-        if (!music_active() && !stream_active()) {
+        if (mode != USB_AUDIO && !music_active() && !stream_active()) {
             vTaskDelay(pdMS_TO_TICKS(10));
         } else {
             vTaskDelay(1);

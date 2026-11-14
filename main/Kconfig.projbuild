@@ -15,4 +15,7 @@ config MVP_GATEWAY_PORT
 config MVP_ENABLE_WEB
     bool "Enable legacy HTTP panel and unauthenticated OTA on trusted test LAN"
     default n
+config MVP_BATTERY_ADC
+    bool "Battery sense jumper installed (GPIO1, camera disconnected)"
+    default n
 endmenu
