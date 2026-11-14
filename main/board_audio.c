@@ -6,7 +6,21 @@
 #include "esp_log.h"
 
 static const char *TAG = "board_audio";
-enum { OUTPUT_PERCENT = 10 };
+enum { MIN_VOLUME_PERCENT = 5, MAX_VOLUME_PERCENT = 10 };
+static int output_percent = MIN_VOLUME_PERCENT;
+
+void board_adjust_volume(int step)
+{
+    int next = output_percent + step;
+    if (next < MIN_VOLUME_PERCENT) {
+        next = MIN_VOLUME_PERCENT;
+    }
+    if (next > MAX_VOLUME_PERCENT) {
+        next = MAX_VOLUME_PERCENT;
+    }
+    output_percent = next;
+    ESP_LOGI(TAG, "Volume: %d%%", output_percent);
+}
 static i2s_chan_handle_t tx, rx;
 static i2c_master_dev_handle_t tca;
 static bool mic_ok, speaker_ok;
@@ -133,7 +147,7 @@ bool board_write(const int16_t *mono, size_t frames)
     }
     for (size_t i = 0; i < frames; ++i) {
         // Apply the same fixed ceiling to music, diagnostics and gateway audio.
-        int16_t sample = (int32_t)mono[i] * OUTPUT_PERCENT / 100;
+        int16_t sample = (int32_t)mono[i] * output_percent / 100;
         stereo[2 * i] = sample;
         stereo[2 * i + 1] = sample;
     }

@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -31,6 +32,8 @@
 #define TCA9555_INPUT_PORT_1 0x01
 
 #define K1_MASK (1U << 1)
+#define K2_MASK (1U << 2)
+#define BOOT_GPIO GPIO_NUM_0
 
 static const char *TAG = "STATUS_DEMO";
 
@@ -372,40 +375,37 @@ typedef enum {
     EXTRA_LONG_PRESS
 } button_action_t;
 
-static button_action_t read_k1(void)
+typedef struct {
+    bool candidate, stable, armed;
+    TickType_t changed, down;
+} button_state_t;
+
+static button_action_t read_button(button_state_t *state, bool pressed, const char *name)
 {
-    static bool candidate, stable, armed;
-    static TickType_t changed, down;
-    uint8_t port;
-    const uint8_t reg = TCA9555_INPUT_PORT_1;
-    if (i2c_master_transmit_receive(tca9555, &reg, 1, &port, 1, 30) != ESP_OK) {
-        return NO_PRESS;
-    }
-    bool pressed = (port & K1_MASK) == 0;
     TickType_t now = xTaskGetTickCount();
-    if (pressed != candidate) {
-        candidate = pressed;
-        changed = now;
+    if (pressed != state->candidate) {
+        state->candidate = pressed;
+        state->changed = now;
     }
-    if (now - changed < pdMS_TO_TICKS(35)) {
+    if (now - state->changed < pdMS_TO_TICKS(35)) {
         return NO_PRESS;
     }
-    if (!stable && !pressed) {
-        armed = true;
+    if (!state->stable && !pressed) {
+        state->armed = true;
     }
-    if (stable == pressed) {
+    if (state->stable == pressed) {
         return NO_PRESS;
     }
-    stable = pressed;
+    state->stable = pressed;
     if (pressed) {
-        down = changed;
+        state->down = state->changed;
         return NO_PRESS;
     }
-    if (!armed) {
+    if (!state->armed) {
         return NO_PRESS;
     }
-    TickType_t held = changed - down;
-    ESP_LOGI(TAG, "K1 held %lu ms", (unsigned long)(held * portTICK_PERIOD_MS));
+    TickType_t held = state->changed - state->down;
+    ESP_LOGI(TAG, "%s held %lu ms", name, (unsigned long)(held * portTICK_PERIOD_MS));
     if (held >= pdMS_TO_TICKS(2500)) {
         return EXTRA_LONG_PRESS;
     }
@@ -424,6 +424,8 @@ void app_main(void)
 
     leds_init();
     buttons_init();
+    ESP_ERROR_CHECK(gpio_set_direction(BOOT_GPIO, GPIO_MODE_INPUT));
+    ESP_ERROR_CHECK(gpio_pullup_en(BOOT_GPIO));
     board_audio_init(i2c_bus, tca9555);
     bool has_tracks = music_scan();
     if (CONFIG_MVP_WIFI_SSID[0]) {
@@ -437,11 +439,19 @@ void app_main(void)
     if (has_tracks) {
         ESP_LOGI(TAG, "Autoplay from microSD");
     }
-    bool autoplay_error = has_tracks && !music_select(false);
+    bool autoplay_error = has_tracks && !music_select(0);
     TickType_t error_at = 0;
     bool showing_error = false;
+    button_state_t k1 = {0}, k2 = {0}, boot = {0};
     while (true) {
-        button_action_t action = read_k1();
+        uint8_t port;
+        const uint8_t reg = TCA9555_INPUT_PORT_1;
+        button_action_t action = NO_PRESS, up = NO_PRESS;
+        if (i2c_master_transmit_receive(tca9555, &reg, 1, &port, 1, 30) == ESP_OK) {
+            action = read_button(&k1, !(port & K1_MASK), "K1");
+            up = read_button(&k2, !(port & K2_MASK), "K2");
+        }
+        button_action_t lower = read_button(&boot, !gpio_get_level(BOOT_GPIO), "BOOT");
         bool ok = !autoplay_error;
         autoplay_error = false;
         if (action == EXTRA_LONG_PRESS) {
@@ -460,7 +470,7 @@ void app_main(void)
                 if (music_active()) {
                     music_stop();
                 } else {
-                    ok = music_select(false);
+                    ok = music_select(0);
                 }
                 break;
             case ES_TO_RU:
@@ -476,11 +486,23 @@ void app_main(void)
             }
         } else if (action == LONG_PRESS) {
             if (mode == MUSIC) {
-                ok = music_select(true);
+                ok = music_select(1);
             } else if (stream_active()) {
                 stream_stop();
             } else {
                 ESP_LOGI(TAG, "Wi-Fi %s", wifi_connected ? "connected" : "offline");
+            }
+        }
+        if (mode == MUSIC) {
+            if (up == SHORT_PRESS) {
+                board_adjust_volume(1);
+            } else if (up != NO_PRESS) {
+                ok = music_select(1);
+            }
+            if (lower == SHORT_PRESS) {
+                board_adjust_volume(-1);
+            } else if (lower != NO_PRESS) {
+                ok = music_select(-1) && ok;
             }
         }
         if (!music_tick() || !stream_tick() || !ok) {

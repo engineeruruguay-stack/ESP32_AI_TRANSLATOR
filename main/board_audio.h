@@ -14,3 +14,4 @@ bool board_read(int16_t *mono, size_t frames, bool report_peaks);
 bool board_write(const int16_t *mono, size_t frames);
 bool board_amp(bool enabled);
 void board_diagnostics(void);
+void board_adjust_volume(int step);

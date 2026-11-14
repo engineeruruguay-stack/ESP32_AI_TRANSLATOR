@@ -102,15 +102,13 @@ static bool skip_id3(FILE *track)
     return fseek(track, size + ((header[5] & 0x10) ? 10 : 0), SEEK_CUR) == 0;
 }
 
-bool music_select(bool next)
+bool music_select(int step)
 {
     music_stop();
     if (!board_speaker_ready() || (!count && !music_scan())) {
         return false;
     }
-    if (next) {
-        selected = (selected + 1) % count;
-    }
+    selected = (selected + count + step) % count;
     char filename[sizeof(MOUNT) + sizeof(tracks[0])];
     snprintf(filename, sizeof(filename), MOUNT "/%s", tracks[selected]);
     file = fopen(filename, "rb");
@@ -182,7 +180,8 @@ bool music_tick(void)
     }
     music_stop();
     if (ok) {
-        ESP_LOGI(TAG, "Track completed");
+        ESP_LOGI(TAG, "Track completed, advancing");
+        return music_select(1);
     } else {
         ESP_LOGE(TAG, "MP3 decode or SD read failed");
     }
